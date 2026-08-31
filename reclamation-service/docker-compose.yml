@@ -1,0 +1,23 @@
+version: "3.9"
+
+services:
+  reclamation-service:
+    build: .
+    container_name: reclamation-service
+    restart: unless-stopped
+    ports:
+      - "3016:3016"
+    environment:
+      PORT: 3016
+      MONGO_URI: ${MONGO_URI}
+      JWT_SECRET: ${JWT_SECRET}
+      USER_SERVICE_URL: ${USER_SERVICE_URL}
+      PRACTICE_SERVICE_URL: ${PRACTICE_SERVICE_URL}
+      POINT_SERVICE_URL: ${POINT_SERVICE_URL}
+      CORS_ORIGIN: ${CORS_ORIGIN:-http://localhost:4200}
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:3016/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s

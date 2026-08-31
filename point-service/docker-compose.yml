@@ -1,0 +1,31 @@
+version: "3.9"
+
+# ══════════════════════════════════════════════════════════════════
+#  MongoDB est sur Atlas → pas de container mongo ici
+#
+#  Lancer :  docker-compose up --build
+#  Logs :    docker-compose logs -f point-service
+#  Arrêter : docker-compose down
+# ══════════════════════════════════════════════════════════════════
+
+services:
+
+  point-service:
+    build: .
+    container_name: point-service
+    restart: unless-stopped
+    ports:
+      - "3007:3007"
+    environment:
+      PORT: 3007
+      MONGO_URI: ${MONGO_URI}
+      JWT_SECRET: ${JWT_SECRET}
+      USER_SERVICE_URL: ${USER_SERVICE_URL}
+      PRACTICE_SERVICE_URL: ${PRACTICE_SERVICE_URL}
+      CORS_ORIGIN: ${CORS_ORIGIN:-http://localhost:4200}
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:3007/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s

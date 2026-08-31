@@ -1,0 +1,24 @@
+{
+  "name": "mood-service",
+  "version": "1.0.0",
+  "description": "Microservice Mood — HRBP Platform",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "nodemon server.js"
+  },
+  "type": "commonjs",
+  "dependencies": {
+    "axios": "^1.7.2",
+    "cors": "^2.8.6",
+    "dotenv": "^17.4.2",
+    "eureka-js-client": "^4.5.0",
+    "express": "^5.2.1",
+    "jsonwebtoken": "^9.0.3",
+    "mongodb": "^7.5.0",
+    "mongoose": "^9.9.3"
+  },
+  "devDependencies": {
+    "nodemon": "^3.1.11"
+  }
+}

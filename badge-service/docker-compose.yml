@@ -1,0 +1,21 @@
+services:
+
+  badge-service:
+    build: .
+    container_name: badge-service
+    restart: unless-stopped
+    ports:
+      - "3011:3011"
+    environment:
+      PORT: 3011
+      MONGO_URI: ${MONGO_URI}
+      JWT_SECRET: ${JWT_SECRET}
+      USER_SERVICE_URL: ${USER_SERVICE_URL}
+      PRACTICE_SERVICE_URL: ${PRACTICE_SERVICE_URL}
+      CORS_ORIGIN: ${CORS_ORIGIN:-http://localhost:4200}
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:3011/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s

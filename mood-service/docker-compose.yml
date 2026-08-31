@@ -1,0 +1,20 @@
+version: "3.9"
+
+services:
+  mood-service:
+    build: .
+    container_name: mood-service
+    restart: unless-stopped
+    ports:
+      - "3013:3013"
+    environment:
+      PORT: 3013
+      MONGO_URI: ${MONGO_URI}
+      JWT_SECRET: ${JWT_SECRET}
+      CORS_ORIGIN: ${CORS_ORIGIN:-http://localhost:4200}
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:3013/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s

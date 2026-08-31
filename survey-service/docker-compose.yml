@@ -1,0 +1,38 @@
+version: "3.9"
+
+# ══════════════════════════════════════════════════════════════════
+#  MongoDB est sur Atlas → pas de container mongo ici
+#
+#  Lancer :  docker-compose up --build
+#  Logs :    docker-compose logs -f survey-service
+#  Arrêter : docker-compose down
+# ══════════════════════════════════════════════════════════════════
+
+services:
+
+  survey-service:
+    build: .
+    container_name: survey-service
+    restart: unless-stopped
+    ports:
+      - "3008:3008"
+    environment:
+      PORT: 3008
+      NODE_ENV: ${NODE_ENV:-production}
+      MONGO_URI: ${MONGO_URI}
+      JWT_SECRET: ${JWT_SECRET}
+      USER_SERVICE_URL: ${USER_SERVICE_URL}
+      PRACTICE_SERVICE_URL: ${PRACTICE_SERVICE_URL}
+      BADGE_SERVICE_URL: ${BADGE_SERVICE_URL}
+      CORS_ORIGIN: ${CORS_ORIGIN:-http://localhost:4200}
+      EUREKA_ENABLED: ${EUREKA_ENABLED:-true}
+      EUREKA_HOST: ${EUREKA_HOST:-eureka-server}
+      EUREKA_PORT: ${EUREKA_PORT:-8761}
+      EUREKA_INSTANCE_HOSTNAME: ${EUREKA_INSTANCE_HOSTNAME:-survey-service}
+      EUREKA_INSTANCE_IP: ${EUREKA_INSTANCE_IP:-127.0.0.1}
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:3008/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
