@@ -7,51 +7,40 @@ const projectSchema = new mongoose.Schema(
       required: true,
       trim: true,
     },
-
     description: {
       type: String,
       trim: true,
       default: "",
     },
-
     status: {
       type: String,
       enum: ["ACTIVE", "INACTIVE", "ON_HOLD", "COMPLETED"],
       default: "ACTIVE",
     },
-
-    // Relation : chaque projet appartient à une practice
+    // Practice vit dans practice-service (Mongo, _id = UUID string) — pas une ref Mongoose locale
     practice_id: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: "Practice",
+      type: String,
       required: true,
     },
-
-    // Chef de projet optionnel (un User résolu via user-service)
+    // Manager vit dans user-service (Postgres, id = UUID) — idem
     manager: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: "User",
+      type: String,
       default: null,
     },
-
     startDate: {
       type: Date,
       default: null,
     },
-
     endDate: {
       type: Date,
       default: null,
     },
-
     creationDate: {
       type: Date,
       default: Date.now,
     },
   },
-  {
-    timestamps: true,
-  }
+  { timestamps: true }
 );
 
-module.exports = mongoose.model("Project", projectSchema);
+module.exports = mongoose.models.Project || mongoose.model("Project", projectSchema);

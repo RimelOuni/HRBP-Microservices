@@ -1,44 +1,26 @@
-const mongoose = require("mongoose");
-const Badge    = require("../models/Badge.model");
+const Badge = require("../models/Badge.model");
 const { BADGE_DEFINITIONS } = require("../models/Badges.config");
 
 const userSvc     = require("../services/user.service");
 const practiceSvc = require("../services/practice.service");
 
-// ─── Helpers ──────────────────────────────────────────────────────────────
-
-function uid(req) {
-  return req.user?._id || req.user?.userId || req.user?.id;
-}
-
 function token(req) {
   return (req.headers.authorization || "").replace("Bearer ", "");
 }
 
-function isValidId(id) {
-  return !!id && mongoose.Types.ObjectId.isValid(id.toString());
-}
-
-/**
- * Résout practiceId (ObjectId → {_id, name}) sur un badge plain object.
- * Équivalent de .populate("practiceId", "name")
- */
 async function resolvePracticeId(obj, tk) {
-  if (isValidId(obj.practiceId)) {
-    obj.practiceId = await practiceSvc.getPracticeSnapshot(obj.practiceId.toString(), tk);
+  if (obj.practiceId) {
+    obj.practiceId = await practiceSvc.getPracticeSnapshot(obj.practiceId, tk);
   } else {
     obj.practiceId = null;
   }
   return obj;
 }
 
-/**
- * Résout userId (ObjectId → {_id, first_name, last_name, email, role}) sur un badge plain object.
- * Équivalent de .populate("userId", "first_name last_name email role")
- */
 async function resolveUserId(obj, tk) {
-  if (isValidId(obj.userId)) {
-    obj.userId = await userSvc.getUserSnapshot(obj.userId.toString(), tk);
+  if (obj.userId) {
+    const snap = await userSvc.getUserSnapshot(obj.userId, tk);
+    if (snap) obj.userId = snap;
   }
   return obj;
 }
@@ -48,14 +30,14 @@ async function resolveUserId(obj, tk) {
 // ═══════════════════════════════════════════════════════════════════
 exports.getMyBadges = async (req, res) => {
   try {
-    const userId = uid(req);
-    const tk     = token(req);
+    const tk = token(req);
+    const profile = await userSvc.getCurrentUserProfile(tk);
+    if (!profile) {
+      return res.status(401).json({ message: "Unauthorized: unable to resolve user profile" });
+    }
 
-    const badges = await Badge.find({ userId }).sort({ earnedAt: 1 }).lean();
-
-    const populated = await Promise.all(
-      badges.map((b) => resolvePracticeId(b, tk))
-    );
+    const badges = await Badge.find({ userId: profile._id }).sort({ earnedAt: 1 }).lean();
+    const populated = await Promise.all(badges.map((b) => resolvePracticeId(b, tk)));
 
     res.json(populated);
   } catch (e) {
@@ -70,10 +52,8 @@ exports.getMyBadges = async (req, res) => {
 exports.getAllBadges = async (req, res) => {
   try {
     const tk = token(req);
-
     const badges = await Badge.find().sort({ earnedAt: -1 }).lean();
 
-    // Résout userId + practiceId en parallèle pour chaque badge
     const populated = await Promise.all(
       badges.map(async (b) => {
         let obj = { ...b };

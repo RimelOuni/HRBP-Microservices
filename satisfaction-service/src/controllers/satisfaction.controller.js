@@ -1,29 +1,32 @@
 const mongoose = require("mongoose");
 const Satisfaction = require("../models/Satisfaction.model");
+const userSvc = require("../services/user.service");
 
-function uid(req) {
-  return req.user?.userId || req.user?.id || req.user?._id;
+function token(req) {
+  return (req.headers.authorization || "").replace("Bearer ", "");
 }
 
-function isValidId(id) {
-  return !!id && id.toString().match(/^[a-f\d]{24}$/i);
+// Valide uniquement l'_id Mongo d'un point (point-service) — plus utilisé pour un ID user-service
+function isValidObjectId(id) {
+  return !!id && mongoose.Types.ObjectId.isValid(id.toString());
 }
 
 // ═══════════════════════════════════════════════════════════
 // POST /api/satisfactions — enregistrer une satisfaction
-// (fusion de saveSatisfaction et updateSatisfaction du monolithe)
 // ═══════════════════════════════════════════════════════════
 const saveSatisfaction = async (req, res) => {
   try {
+    const tk = token(req);
+    const user = await userSvc.getCurrentUserProfile(tk);
+    if (!user) return res.status(401).json({ message: "Unauthorized" });
+
     const { value, comment, point_id } = req.body;
-    const collaborateur = uid(req);
-    if (!collaborateur) return res.status(401).json({ message: "Unauthorized" });
 
     const newSat = await Satisfaction.create({
-      collaborateur,
+      collaborateur: user._id,
       value,
       comment: comment || "",
-      point_id: point_id || null,
+      point_id: isValidObjectId(point_id) ? point_id : null,
     });
 
     return res.status(201).json({ message: "Satisfaction enregistrée", satisfaction: newSat });
@@ -38,10 +41,11 @@ const saveSatisfaction = async (req, res) => {
 // ═══════════════════════════════════════════════════════════
 const getMySatisfactions = async (req, res) => {
   try {
-    const collaborateur = uid(req);
-    if (!collaborateur) return res.status(401).json({ message: "Unauthorized" });
+    const tk = token(req);
+    const user = await userSvc.getCurrentUserProfile(tk);
+    if (!user) return res.status(401).json({ message: "Unauthorized" });
 
-    const sats = await Satisfaction.find({ collaborateur }).sort({ createdAt: -1 });
+    const sats = await Satisfaction.find({ collaborateur: user._id }).sort({ createdAt: -1 });
     return res.status(200).json({ success: true, data: sats });
   } catch (err) {
     console.error("[satisfaction-service] getMySatisfactions error:", err.message);
@@ -51,14 +55,14 @@ const getMySatisfactions = async (req, res) => {
 
 // ═══════════════════════════════════════════════════════════
 // GET /api/satisfactions/me/last — dernière satisfaction du user connecté
-// (remplace la partie "satisfaction" de getLastMoodAndSatisfaction)
 // ═══════════════════════════════════════════════════════════
 const getLastSatisfaction = async (req, res) => {
   try {
-    const collaborateur = uid(req);
-    if (!collaborateur) return res.status(401).json({ message: "Unauthorized" });
+    const tk = token(req);
+    const user = await userSvc.getCurrentUserProfile(tk);
+    if (!user) return res.status(401).json({ message: "Unauthorized" });
 
-    const lastSat = await Satisfaction.findOne({ collaborateur }).sort({ createdAt: -1 });
+    const lastSat = await Satisfaction.findOne({ collaborateur: user._id }).sort({ createdAt: -1 });
     return res.json({ satisfaction: lastSat });
   } catch (err) {
     console.error("[satisfaction-service] getLastSatisfaction error:", err.message);
@@ -68,7 +72,7 @@ const getLastSatisfaction = async (req, res) => {
 
 // ═══════════════════════════════════════════════════════════
 // POST /api/satisfactions/bulk — dernière satisfaction pour une liste de collaborateurs
-// (remplace la partie "satisfaction" de getMoodAndSatForMany)
+// ids = IDs user-service (UUID string) — plus de cast ObjectId
 // ═══════════════════════════════════════════════════════════
 const getSatisfactionForMany = async (req, res) => {
   try {
@@ -77,12 +81,10 @@ const getSatisfactionForMany = async (req, res) => {
       return res.status(400).json({ message: "ids doit être un tableau" });
     }
 
-    const objectIds = ids
-      .filter(isValidId)
-      .map((id) => new mongoose.Types.ObjectId(id));
+    const cleanIds = ids.filter(Boolean).map((id) => id.toString());
 
     const sats = await Satisfaction.aggregate([
-      { $match: { collaborateur: { $in: objectIds } } },
+      { $match: { collaborateur: { $in: cleanIds } } },
       { $sort: { createdAt: -1 } },
       {
         $group: {
@@ -96,7 +98,7 @@ const getSatisfactionForMany = async (req, res) => {
     const result = {};
     ids.forEach((id) => { result[id] = { satisfaction: null, comment: null }; });
     sats.forEach((s) => {
-      result[s._id.toString()] = { satisfaction: s.value, comment: s.comment };
+      result[s._id] = { satisfaction: s.value, comment: s.comment };
     });
 
     return res.json(result);
@@ -108,22 +110,23 @@ const getSatisfactionForMany = async (req, res) => {
 
 // ═══════════════════════════════════════════════════════════
 // POST /api/satisfactions/by-points — satisfaction du user pour une liste de points
-// (identique à getSatisfactionsByPoints du monolithe)
+// point_ids = ObjectId Mongo (point-service), inchangé
 // ═══════════════════════════════════════════════════════════
 const getSatisfactionsByPoints = async (req, res) => {
   try {
-    const collaborateur = uid(req);
-    if (!collaborateur) return res.status(401).json({ message: "Unauthorized" });
+    const tk = token(req);
+    const user = await userSvc.getCurrentUserProfile(tk);
+    if (!user) return res.status(401).json({ message: "Unauthorized" });
 
     const { point_ids } = req.body;
     if (!Array.isArray(point_ids) || !point_ids.length) {
       return res.json({});
     }
 
-    const objectIds = point_ids.filter(isValidId).map((id) => new mongoose.Types.ObjectId(id));
+    const objectIds = point_ids.filter(isValidObjectId).map((id) => new mongoose.Types.ObjectId(id));
 
     const sats = await Satisfaction.find({
-      collaborateur,
+      collaborateur: user._id,
       point_id: { $in: objectIds },
     }).sort({ createdAt: -1 });
 

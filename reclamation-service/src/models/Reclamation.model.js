@@ -2,15 +2,16 @@ const mongoose = require("mongoose");
 
 const reclamationSchema = new mongoose.Schema(
   {
+    // Interne à point-service — reste un vrai ObjectId Mongo
     point_id: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "Point",
       required: true,
       index: true,
     },
+    // ID user-service (UUID string)
     claimant: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: "User",
+      type: String,
       required: true,
       index: true,
     },
@@ -19,9 +20,9 @@ const reclamationSchema = new mongoose.Schema(
       enum: ["COLLABORATEUR", "MANAGER"],
       default: "COLLABORATEUR",
     },
+    // ID practice-service (UUID string)
     practice_id: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: "Practice",
+      type: String,
       default: null,
     },
     titre:       { type: String, required: true, trim: true },

@@ -1,57 +1,53 @@
 const axios = require("axios");
 
-const BASE    = () => process.env.USER_SERVICE_URL; // http://localhost:5000
+const BASE    = () => process.env.USER_SERVICE_URL;
 const headers = (token) => ({ Authorization: `Bearer ${token}` });
 const TIMEOUT = 8000;
 
-/**
- * Récupère un user par son ID depuis le monolithe.
- * Renvoie null si introuvable (jamais de throw).
- */
+function mapUser(u) {
+  if (!u) return null;
+  return {
+    _id:        u.id,
+    first_name: u.prenom,
+    last_name:  u.nom,
+    email:      u.email,
+    role:       u.role,
+    photo_url:  u.photoUrl || null,
+  };
+}
+
 const getUserById = async (userId, token) => {
   if (!userId) return null;
   try {
-    const { data } = await axios.get(`${BASE()}/api/user/${userId}`, {
+    const { data } = await axios.get(`${BASE()}/api/users/${userId}`, {
       headers: headers(token),
       timeout: TIMEOUT,
     });
-    return data?.data || data;
+    return mapUser(data);
   } catch (err) {
     console.error(`[alert-service] user.service getUserById(${userId}) failed:`, err.message);
     return null;
   }
 };
 
-/**
- * Snapshot created_by → { _id, first_name, last_name, email, photo_url }
- * Équivalent de .populate("created_by", "first_name last_name email photo_url")
- */
-const getCreatedBySnapshot = async (userId, token) => {
-  const u = await getUserById(userId, token);
-  if (!u) return null;
-  return {
-    _id:        u._id,
-    first_name: u.first_name,
-    last_name:  u.last_name,
-    email:      u.email,
-    photo_url:  u.photo_url || null,
-  };
-};
+const getCreatedBySnapshot = async (userId, token) => getUserById(userId, token);
+const getDestinationSnapshot = async (userId, token) => getUserById(userId, token);
 
 /**
- * Snapshot destination_user_id → { _id, first_name, last_name, email, role }
- * Équivalent de .populate("destination_user_id", "first_name last_name email role")
+ * Résout l'utilisateur courant via /api/users/me (keycloakId → entity id),
+ * nécessaire pour obtenir l'ID à stocker comme created_by.
  */
-const getDestinationSnapshot = async (userId, token) => {
-  const u = await getUserById(userId, token);
-  if (!u) return null;
-  return {
-    _id:        u._id,
-    first_name: u.first_name,
-    last_name:  u.last_name,
-    email:      u.email,
-    role:       u.role || null,
-  };
+const getCurrentUserProfile = async (token) => {
+  try {
+    const { data } = await axios.get(`${BASE()}/api/users/me`, {
+      headers: headers(token),
+      timeout: TIMEOUT,
+    });
+    return mapUser(data);
+  } catch (err) {
+    console.error("[alert-service] user.service getCurrentUserProfile failed:", err.message);
+    return null;
+  }
 };
 
-module.exports = { getUserById, getCreatedBySnapshot, getDestinationSnapshot };
+module.exports = { getUserById, getCreatedBySnapshot, getDestinationSnapshot, getCurrentUserProfile };

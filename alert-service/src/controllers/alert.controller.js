@@ -4,32 +4,21 @@ const Alert    = require("../models/Alert.model");
 const userSvc  = require("../services/user.service");
 const pointSvc = require("../services/point.service");
 
-// ─── Helpers ──────────────────────────────────────────────────────────────
-
-function uid(req) {
-  return req.user?.id || req.user?._id || req.user?.userId;
-}
-
 function token(req) {
   return (req.headers.authorization || "").replace("Bearer ", "");
 }
 
-function isValidId(id) {
+function isValidObjectId(id) {
   return !!id && mongoose.Types.ObjectId.isValid(id.toString());
 }
 
-/**
- * Résout les 3 refs d'une alerte en parallèle :
- * created_by, destination_user_id, point_id
- * fields : champs souhaités sur le point (varient selon la route)
- */
 async function resolveAlertRefs(alertDoc, tk, pointFields = ["titre"]) {
   const obj = alertDoc.toObject ? alertDoc.toObject() : { ...alertDoc };
 
   const [createdBy, destination, point] = await Promise.all([
-    isValidId(obj.created_by)          ? userSvc.getCreatedBySnapshot(obj.created_by.toString(), tk)          : Promise.resolve(null),
-    isValidId(obj.destination_user_id) ? userSvc.getDestinationSnapshot(obj.destination_user_id.toString(), tk) : Promise.resolve(null),
-    isValidId(obj.point_id)            ? pointSvc.getPointSnapshot(obj.point_id.toString(), tk, pointFields)    : Promise.resolve(null),
+    obj.created_by          ? userSvc.getCreatedBySnapshot(obj.created_by, tk)          : Promise.resolve(null),
+    obj.destination_user_id ? userSvc.getDestinationSnapshot(obj.destination_user_id, tk) : Promise.resolve(null),
+    isValidObjectId(obj.point_id) ? pointSvc.getPointSnapshot(obj.point_id.toString(), tk, pointFields) : Promise.resolve(null),
   ]);
 
   obj.created_by          = createdBy;
@@ -44,8 +33,11 @@ async function resolveAlertRefs(alertDoc, tk, pointFields = ["titre"]) {
 // ═══════════════════════════════════════════════════════════════════
 const createAlert = async (req, res) => {
   try {
-    const userId = uid(req);
-    const tk     = token(req);
+    const tk = token(req);
+    const profile = await userSvc.getCurrentUserProfile(tk);
+    if (!profile) {
+      return res.status(401).json({ success: false, message: "Unauthorized: unable to resolve user profile" });
+    }
 
     const {
       point_id, type, titre, description, managerNote,
@@ -58,10 +50,10 @@ const createAlert = async (req, res) => {
 
     const alert = new Alert({
       point_id, type, titre, description, managerNote,
-      keyPoints:           keyPoints || [],
+      keyPoints: keyPoints || [],
       date,
-      statut:              statut || "En attente",
-      created_by:          userId,
+      statut: statut || "En attente",
+      created_by: profile._id,
       destination_user_id, destination_label,
     });
 
@@ -83,15 +75,12 @@ const getAlertsByPoint = async (req, res) => {
     const { pointId } = req.params;
     const tk = token(req);
 
-    if (!isValidId(pointId)) {
+    if (!isValidObjectId(pointId)) {
       return res.status(400).json({ success: false, message: "Invalid point ID" });
     }
 
     const alerts = await Alert.find({ point_id: pointId }).sort({ createdAt: -1 });
-
-    const populated = await Promise.all(
-      alerts.map((a) => resolveAlertRefs(a, tk, ["titre"]))
-    );
+    const populated = await Promise.all(alerts.map((a) => resolveAlertRefs(a, tk, ["titre"])));
 
     return res.status(200).json({ success: true, data: populated });
   } catch (err) {
@@ -105,16 +94,10 @@ const getAlertsByPoint = async (req, res) => {
 // ═══════════════════════════════════════════════════════════════════
 const getAlertsByManager = async (req, res) => {
   try {
-    const { managerId } = req.params;
+    const { managerId } = req.params; // UUID user-service — plus de check isValidId (ObjectId)
     const tk = token(req);
 
-    if (!isValidId(managerId)) {
-      return res.status(400).json({ success: false, message: "Invalid manager ID" });
-    }
-
     const alerts = await Alert.find({ destination_user_id: managerId }).sort({ createdAt: -1 });
-
-    // getAlertsByManager dans le monolithe populate point_id avec titre + criticite + status
     const populated = await Promise.all(
       alerts.map((a) => resolveAlertRefs(a, tk, ["titre", "criticite", "status"]))
     );
@@ -134,16 +117,11 @@ const updateAlert = async (req, res) => {
     const { alertId } = req.params;
     const tk = token(req);
 
-    if (!isValidId(alertId)) {
+    if (!isValidObjectId(alertId)) {
       return res.status(400).json({ success: false, message: "Invalid alert ID" });
     }
 
-    const alert = await Alert.findByIdAndUpdate(
-      alertId,
-      { $set: req.body },
-      { new: true, runValidators: false }
-    );
-
+    const alert = await Alert.findByIdAndUpdate(alertId, { $set: req.body }, { new: true, runValidators: false });
     if (!alert) return res.status(404).json({ success: false, message: "Alert not found" });
 
     const populated = await resolveAlertRefs(alert, tk, ["titre"]);
@@ -160,11 +138,9 @@ const updateAlert = async (req, res) => {
 const deleteAlert = async (req, res) => {
   try {
     const { alertId } = req.params;
-
-    if (!isValidId(alertId)) {
+    if (!isValidObjectId(alertId)) {
       return res.status(400).json({ success: false, message: "Invalid alert ID" });
     }
-
     await Alert.findByIdAndDelete(alertId);
     return res.status(200).json({ success: true, message: "Alert deleted" });
   } catch (err) {

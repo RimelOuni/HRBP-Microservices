@@ -5,8 +5,6 @@ const authMiddleware = require("../middleware/auth.middleware");
 
 router.use(authMiddleware.authenticate || authMiddleware);
 
-// ⚠️ Routes statiques AVANT toute route dynamique future
-
 router.post("/",             ctrl.saveSatisfaction);
 router.get("/me",            ctrl.getMySatisfactions);
 router.get("/me/last",       ctrl.getLastSatisfaction);

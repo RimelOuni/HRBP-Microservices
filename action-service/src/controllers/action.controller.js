@@ -4,29 +4,24 @@ const Action   = require("../models/Action.model");
 const userSvc  = require("../services/user.service");
 const pointSvc = require("../services/point.service");
 
-// ─── Helpers ──────────────────────────────────────────────────────────────
-
-function uid(req) {
-  return req.user?.userId || req.user?.id || req.user?._id;
-}
-
 function token(req) {
   return (req.headers.authorization || "").replace("Bearer ", "");
 }
 
-function isValidId(id) {
+function isValidObjectId(id) {
   return !!id && mongoose.Types.ObjectId.isValid(id.toString());
 }
 
 async function resolveCreatedBy(obj, tk) {
-  if (isValidId(obj.created_by)) {
-    obj.created_by = await userSvc.getUserSnapshot(obj.created_by.toString(), tk);
+  if (obj.created_by) {
+    const snapshot = await userSvc.getUserSnapshot(obj.created_by, tk);
+    if (snapshot) obj.created_by = snapshot;
   }
   return obj;
 }
 
 async function resolvePointId(obj, tk) {
-  if (isValidId(obj.point_id)) {
+  if (isValidObjectId(obj.point_id)) {
     obj.point_id = await pointSvc.getPointSnapshot(obj.point_id.toString(), tk);
   }
   return obj;
@@ -43,9 +38,11 @@ exports.createAction = async (req, res) => {
       return res.status(400).json({ message: "point_id and action are required" });
     }
 
-    const userId = uid(req);
-    if (!userId) {
-      return res.status(401).json({ message: "Unauthorized: user not found in token" });
+    const tk = token(req);
+    // Résout l'ID interne user-service via /api/users/me (keycloakId != entity id)
+    const profile = await userSvc.getCurrentUserProfile(tk);
+    if (!profile) {
+      return res.status(401).json({ message: "Unauthorized: unable to resolve user profile" });
     }
 
     const newAction = await Action.create({
@@ -53,7 +50,7 @@ exports.createAction = async (req, res) => {
       action,
       description,
       status,
-      created_by: userId,
+      created_by: profile._id,
     });
 
     res.status(201).json(newAction);
@@ -71,12 +68,11 @@ exports.getActionsByPoint = async (req, res) => {
     const { pointId } = req.params;
     const tk = token(req);
 
-    if (!isValidId(pointId)) {
+    if (!isValidObjectId(pointId)) {
       return res.status(400).json({ message: "Invalid point ID" });
     }
 
     const actions = await Action.find({ point_id: pointId }).sort({ createdAt: -1 });
-
     const populated = await Promise.all(
       actions.map(async (a) => resolveCreatedBy(a.toObject(), tk))
     );
@@ -95,7 +91,7 @@ exports.getActionById = async (req, res) => {
   try {
     const tk = token(req);
 
-    if (!isValidId(req.params.id)) {
+    if (!isValidObjectId(req.params.id)) {
       return res.status(400).json({ message: "Invalid action ID" });
     }
 
@@ -115,6 +111,9 @@ exports.getActionById = async (req, res) => {
   }
 };
 
+// updateAction / deleteAction — inchangés, ils utilisent déjà isValidId sur req.params.id
+// (l'id Mongo de l'Action elle-même, pas point_id ni created_by) → renomme juste
+// isValidId en isValidObjectId pour cohérence de nommage si tu gardes tout dans un seul fichier.
 // ═══════════════════════════════════════════════════════════════════
 // UPDATE action — PUT /api/actions/:id
 // ═══════════════════════════════════════════════════════════════════

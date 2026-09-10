@@ -3,8 +3,7 @@ const mongoose = require("mongoose");
 const moodSchema = new mongoose.Schema(
   {
     collaborateur: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: "User",
+      type: String,
       required: true,
     },
     mood: {

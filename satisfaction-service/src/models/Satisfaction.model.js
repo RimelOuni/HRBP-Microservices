@@ -1,28 +1,29 @@
-const mongoose = require('mongoose');
+const mongoose = require("mongoose");
 
 const satisfactionSchema = new mongoose.Schema(
   {
+    // ID user-service (UUID string) — pas un ObjectId Mongo
     collaborateur: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: 'User',
-      required: true
+      type: String,
+      required: true,
+      index: true,
     },
-
     point_id: {
       type: mongoose.Schema.Types.ObjectId,
-      ref: 'Point',
-      default: null
+      ref: "Point",
+      default: null,
     },
     value: {
       type: Number,
-      required: true
+      required: true,
     },
     comment: {
       type: String,
-      default: ''
-    }
+      default: "",
+    },
   },
   { timestamps: true }
 );
 
-module.exports = mongoose.model('Satisfaction', satisfactionSchema);
+module.exports =
+  mongoose.models.Satisfaction || mongoose.model("Satisfaction", satisfactionSchema);

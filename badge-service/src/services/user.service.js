@@ -1,41 +1,51 @@
 const axios = require("axios");
 
-const BASE    = () => process.env.USER_SERVICE_URL; // http://localhost:5000
+const BASE    = () => process.env.USER_SERVICE_URL;
 const headers = (token) => ({ Authorization: `Bearer ${token}` });
 const TIMEOUT = 8000;
 
-/**
- * Récupère un user par son ID depuis le monolithe.
- * Renvoie null si introuvable (jamais de throw).
- */
+function mapUser(u) {
+  if (!u) return null;
+  return {
+    _id:        u.id,
+    first_name: u.prenom,
+    last_name:  u.nom,
+    email:      u.email,
+    role:       u.role || null,
+  };
+}
+
 const getUserById = async (userId, token) => {
   if (!userId) return null;
   try {
-    const { data } = await axios.get(`${BASE()}/api/user/${userId}`, {
+    const { data } = await axios.get(`${BASE()}/api/users/${userId}`, {
       headers: headers(token),
       timeout: TIMEOUT,
     });
-    return data?.data || data;
+    return mapUser(data);
   } catch (err) {
     console.error(`[badge-service] user.service getUserById(${userId}) failed:`, err.message);
     return null;
   }
 };
 
+const getUserSnapshot = async (userId, token) => getUserById(userId, token);
+
 /**
- * Snapshot userId → { _id, first_name, last_name, email, role }
- * Équivalent de .populate("userId", "first_name last_name email role")
+ * Résout l'utilisateur courant via /api/users/me (keycloakId → entity id),
+ * nécessaire pour filtrer getMyBadges sur le bon userId.
  */
-const getUserSnapshot = async (userId, token) => {
-  const u = await getUserById(userId, token);
-  if (!u) return null;
-  return {
-    _id:        u._id,
-    first_name: u.first_name,
-    last_name:  u.last_name,
-    email:      u.email,
-    role:       u.role || null,
-  };
+const getCurrentUserProfile = async (token) => {
+  try {
+    const { data } = await axios.get(`${BASE()}/api/users/me`, {
+      headers: headers(token),
+      timeout: TIMEOUT,
+    });
+    return mapUser(data);
+  } catch (err) {
+    console.error("[badge-service] user.service getCurrentUserProfile failed:", err.message);
+    return null;
+  }
 };
 
-module.exports = { getUserById, getUserSnapshot };
+module.exports = { getUserById, getUserSnapshot, getCurrentUserProfile };

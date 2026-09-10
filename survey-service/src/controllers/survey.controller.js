@@ -5,29 +5,30 @@ const SurveyResponse  = require("../models/SurveyResponse.model");
 
 const userSvc = require("../services/user.service");
 
-const BADGE_SERVICE_URL   = process.env.BADGE_SERVICE_URL;
+const BADGE_SERVICE_URL    = process.env.BADGE_SERVICE_URL;
 const PRACTICE_SERVICE_URL = process.env.PRACTICE_SERVICE_URL;
 
 // ═══════════════════════════════════════════════════════════════════
 // HELPERS
 // ═══════════════════════════════════════════════════════════════════
 
-function uid(req) {
-  return req.user?._id || req.user?.userId || req.user?.id;
-}
-
 function token(req) {
   return (req.headers.authorization || "").replace("Bearer ", "");
 }
 
-function isValidId(id) {
-  return !!id && mongoose.Types.ObjectId.isValid(id.toString());
+/**
+ * Résout l'utilisateur courant (profil léger) via /api/users/me.
+ * Remplace l'ancien uid(req) qui lisait directement l'ID dans le JWT —
+ * le token Keycloak ne contient que keycloakId, pas l'ID interne.
+ */
+async function resolveCurrentUser(req) {
+  const tk = token(req);
+  const user = await userSvc.getCurrentUserProfile(tk);
+  return { user, tk };
 }
 
 /**
- * Applique la gamification après une réponse à un sondage :
- * incrémente points + surveysAnswered via le user-service, puis délègue
- * le calcul/enregistrement des badges à badge-service.
+ * Applique la gamification après une réponse à un sondage.
  */
 async function applyGamification(user, survey, tk) {
   const updated = await userSvc.incrementGamification(
@@ -54,8 +55,6 @@ async function applyGamification(user, survey, tk) {
     nextBadge = data.nextBadge || null;
   } catch (err) {
     console.error("[survey-service] Erreur appel badge-service:", err.message);
-    // dégrade gracieusement : pas de badge calculé si badge-service est down,
-    // mais les points/surveysAnswered restent bien enregistrés côté user-service
   }
 
   return {
@@ -68,9 +67,9 @@ async function applyGamification(user, survey, tk) {
 }
 
 /**
- * Construit le filtre Mongo des sondages visibles par un user donné,
- * en se basant sur son practice_id (résolu via le user-service) et
- * les sondages déjà répondus (à exclure).
+ * Construit le filtre Mongo des sondages visibles par un user donné.
+ * practice_id et practices sont maintenant tous deux des UUID string —
+ * plus besoin de cast ObjectId pour matcher.
  */
 async function buildUserFilter(userId, tk) {
   const user = await userSvc.getUserSnapshot(userId, tk);
@@ -82,12 +81,9 @@ async function buildUserFilter(userId, tk) {
   };
 
   if (user.practice_id?.length > 0) {
-    const userPracticeObjectIds = user.practice_id
-      .filter(isValidId)
-      .map((p) => new mongoose.Types.ObjectId(p));
     filter.$or = [
       { practices: { $size: 0 } },
-      { practices: { $in: userPracticeObjectIds } },
+      { practices: { $in: user.practice_id } },
     ];
   } else {
     filter.practices = { $size: 0 };
@@ -107,16 +103,14 @@ function applySpecificUserFilter(surveys, userId) {
 }
 
 /**
- * Résout practices[] et specificUserIds[] d'un survey en objets légers
- * via les services externes (équivalent du .populate() du monolithe).
+ * Résout practices[] et specificUserIds[] d'un survey en objets légers.
  */
 async function resolveSurveyRefs(surveyDoc, tk) {
   const obj = surveyDoc.toObject ? surveyDoc.toObject() : { ...surveyDoc };
 
   if (Array.isArray(obj.practices) && obj.practices.length > 0) {
     obj.practices = await Promise.all(
-      obj.practices.map(async (p) => {
-        const id = (p && p._id) ? p._id : p;
+      obj.practices.map(async (id) => {
         try {
           const { data } = await axios.get(`${PRACTICE_SERVICE_URL}/api/practices/${id}`, {
             headers: { Authorization: `Bearer ${tk}` },
@@ -132,11 +126,10 @@ async function resolveSurveyRefs(surveyDoc, tk) {
   }
 
   if (Array.isArray(obj.specificUserIds) && obj.specificUserIds.length > 0) {
-    const ids   = obj.specificUserIds.map((u) => (u && u._id) ? u._id : u);
-    const users = await Promise.all(ids.map((id) => userSvc.getUserSnapshot(id, tk)));
+    const users = await Promise.all(obj.specificUserIds.map((id) => userSvc.getUserSnapshot(id, tk)));
     obj.specificUserIds = users
       .filter(Boolean)
-      .map((u) => ({ _id: u._id, firstName: u.firstName, lastName: u.lastName, email: u.email }));
+      .map((u) => ({ _id: u._id, firstName: u.first_name, lastName: u.last_name, email: u.email }));
   }
 
   return obj;
@@ -146,12 +139,9 @@ async function resolveSurveyRefsMany(surveys, tk) {
   return Promise.all(surveys.map((s) => resolveSurveyRefs(s, tk)));
 }
 
-/** Résout practiceAtAnswer (ObjectId → {_id, name}) sur un plain object de réponse */
+/** Résout practiceAtAnswer (UUID string → {_id, name}) sur un plain object de réponse */
 async function resolvePracticeAtAnswer(obj, tk) {
-  if (!isValidId(obj.practiceAtAnswer)) {
-    obj.practiceAtAnswer = null;
-    return obj;
-  }
+  if (!obj.practiceAtAnswer) return obj;
   try {
     const { data } = await axios.get(
       `${PRACTICE_SERVICE_URL}/api/practices/${obj.practiceAtAnswer}`,
@@ -171,6 +161,9 @@ async function resolvePracticeAtAnswer(obj, tk) {
 
 exports.createSurvey = async (req, res) => {
   try {
+    const { user, tk } = await resolveCurrentUser(req);
+    if (!user) return res.status(401).json({ message: "Unauthorized" });
+
     const { title, type, pointsReward, googleFormUrl } = req.body;
     if (!title?.trim()) return res.status(400).json({ message: "Le titre est obligatoire" });
 
@@ -183,12 +176,12 @@ exports.createSurvey = async (req, res) => {
       googleFormUrl:   googleFormUrl || null,
       specificUserIds: [],
       status:          "INACTIVE",
-      createdBy:       uid(req),
+      createdBy:       user._id,
       createdByRole:   "ADMIN_RH",
     });
     await survey.save();
 
-    const populated = await resolveSurveyRefs(survey, token(req));
+    const populated = await resolveSurveyRefs(survey, tk);
     res.status(201).json(populated);
   } catch (error) {
     console.error("[survey-service] createSurvey error:", error.message);
@@ -225,15 +218,15 @@ exports.updateSurvey = async (req, res) => {
     survey.target = "COLLABORATOR";
 
     if (req.body.practice) {
-      const newPracticeId = new mongoose.Types.ObjectId(req.body.practice);
-      const alreadyIn = survey.practices.some((p) => p.toString() === newPracticeId.toString());
+      const newPracticeId = req.body.practice.toString();
+      const alreadyIn = survey.practices.some((p) => p === newPracticeId);
       if (!alreadyIn) survey.practices.push(newPracticeId);
     }
 
     if (Array.isArray(req.body.specificUserIds)) {
       for (const rawId of req.body.specificUserIds) {
-        const newId = new mongoose.Types.ObjectId(rawId);
-        const alreadyIn = survey.specificUserIds.some((id) => id.toString() === newId.toString());
+        const newId = rawId.toString();
+        const alreadyIn = survey.specificUserIds.some((id) => id === newId);
         if (!alreadyIn) survey.specificUserIds.push(newId);
       }
     }
@@ -281,7 +274,7 @@ exports.getStats = async (req, res) => {
     const populated = await Promise.all(
       responses.map(async (r) => {
         let obj = r.toObject();
-        obj.user = isValidId(r.user) ? await userSvc.getUserSnapshot(r.user.toString(), tk) : null;
+        obj.user = r.user ? await userSvc.getUserSnapshot(r.user, tk) : null;
         obj = await resolvePracticeAtAnswer(obj, tk);
         return obj;
       })
@@ -300,14 +293,14 @@ exports.getStats = async (req, res) => {
 
 exports.getSurveysForUser = async (req, res) => {
   try {
-    if (!req.user) return res.status(401).json({ message: "Non authentifié" });
-    const userId = uid(req);
-    const tk     = token(req);
-    const result = await buildUserFilter(userId, tk);
+    const { user, tk } = await resolveCurrentUser(req);
+    if (!user) return res.status(401).json({ message: "Non authentifié" });
+
+    const result = await buildUserFilter(user._id, tk);
     if (!result) return res.status(404).json({ message: "Utilisateur introuvable" });
 
     let surveys = await Survey.find(result.filter).sort({ createdAt: -1 });
-    surveys = applySpecificUserFilter(surveys, userId);
+    surveys = applySpecificUserFilter(surveys, user._id);
 
     const populated = await resolveSurveyRefsMany(surveys, tk);
     res.json(populated);
@@ -319,13 +312,14 @@ exports.getSurveysForUser = async (req, res) => {
 
 exports.getSurveyCount = async (req, res) => {
   try {
-    const userId = uid(req);
-    const tk     = token(req);
-    const result = await buildUserFilter(userId, tk);
+    const { user, tk } = await resolveCurrentUser(req);
+    if (!user) return res.status(401).json({ message: "Non authentifié" });
+
+    const result = await buildUserFilter(user._id, tk);
     if (!result) return res.status(404).json({ message: "Utilisateur introuvable" });
 
     let surveys = await Survey.find(result.filter).lean();
-    surveys = applySpecificUserFilter(surveys, userId);
+    surveys = applySpecificUserFilter(surveys, user._id);
     res.json({ count: surveys.length });
   } catch (error) {
     console.error("[survey-service] getSurveyCount error:", error.message);
@@ -335,22 +329,20 @@ exports.getSurveyCount = async (req, res) => {
 
 exports.completeGoogleSurvey = async (req, res) => {
   try {
-    const userId = uid(req);
-    const tk     = token(req);
+    const { user, tk } = await resolveCurrentUser(req);
+    if (!user) return res.status(401).json({ message: "Non authentifié" });
+
     const survey = await Survey.findById(req.params.id);
     if (!survey) return res.status(404).json({ message: "Survey not found" });
 
-    const already = await SurveyResponse.findOne({ survey: survey._id, user: userId });
+    const already = await SurveyResponse.findOne({ survey: survey._id, user: user._id });
     if (already) return res.status(400).json({ message: "Vous avez déjà validé ce sondage" });
-
-    const user = await userSvc.getUserSnapshot(userId, tk);
-    if (!user) return res.status(404).json({ message: "Utilisateur introuvable" });
 
     const practiceAtAnswer = user.practice_id?.length ? user.practice_id[0] : null;
     await SurveyResponse.create({
       survey:           survey._id,
-      user:              userId,
-      roleAtAnswer:      req.user.role,
+      user:             user._id,
+      roleAtAnswer:     user.role,
       practiceAtAnswer,
     });
 
@@ -366,17 +358,12 @@ exports.completeGoogleSurvey = async (req, res) => {
 // USER — Gamification
 // ═══════════════════════════════════════════════════════════════════
 
-/**
- * Remplace l'ancienne version : les points/surveysAnswered viennent
- * toujours de user-service, mais les badges sont maintenant récupérés
- * via un appel HTTP à badge-service.
- */
 exports.getMyGamification = async (req, res) => {
   try {
-    const userId = uid(req);
-    const tk     = token(req);
+    const { user, tk } = await resolveCurrentUser(req);
+    if (!user) return res.status(401).json({ message: "Non authentifié" });
 
-    const fullUser = await userSvc.getUserById(userId, tk);
+    const fullUser = await userSvc.getUserById(user._id, tk);
     if (!fullUser) return res.status(404).json({ message: "Utilisateur introuvable" });
 
     const points          = fullUser.gamification?.points          ?? 0;
@@ -385,7 +372,7 @@ exports.getMyGamification = async (req, res) => {
     let badgeData = { earnedBadges: [], nextBadge: null, allBadges: [] };
     try {
       const { data } = await axios.get(
-        `${process.env.BADGE_SERVICE_URL}/api/badges/user/${userId}`,
+        `${BADGE_SERVICE_URL}/api/badges/user/${user._id}`,
         {
           params: { surveysAnswered },
           headers: { Authorization: `Bearer ${tk}` },
@@ -395,15 +382,9 @@ exports.getMyGamification = async (req, res) => {
       badgeData = data;
     } catch (err) {
       console.error("[survey-service] Erreur appel badge-service:", err.message);
-      // dégrade gracieusement : points/surveysAnswered restent affichés
-      // même si badge-service est indisponible
     }
 
-    res.json({
-      points,
-      surveysAnswered,
-      ...badgeData,
-    });
+    res.json({ points, surveysAnswered, ...badgeData });
   } catch (e) {
     console.error("[survey-service] getMyGamification error:", e.message);
     res.status(500).json({ message: e.message });
@@ -416,19 +397,15 @@ exports.getMyGamification = async (req, res) => {
 
 exports.createSurveyAsManager = async (req, res) => {
   try {
-    const { title, type, pointsReward, googleFormUrl } = req.body;
-    const userId = uid(req);
-    const tk     = token(req);
-
-    const manager = await userSvc.getUserSnapshot(userId, tk);
+    const { user: manager, tk } = await resolveCurrentUser(req);
     if (!manager) return res.status(404).json({ message: "Manager introuvable" });
 
     if (!manager.practice_id?.length) {
       return res.status(403).json({ message: "Vous n'êtes assigné à aucun practice" });
     }
-
     const managerPracticeId = manager.practice_id[0];
 
+    const { title, type, pointsReward, googleFormUrl } = req.body;
     if (!title?.trim()) {
       return res.status(400).json({ message: "Le titre est obligatoire" });
     }
@@ -442,7 +419,7 @@ exports.createSurveyAsManager = async (req, res) => {
       googleFormUrl:   googleFormUrl || null,
       specificUserIds: [],
       status:          "INACTIVE",
-      createdBy:       userId,
+      createdBy:       manager._id,
       createdByRole:   "MANAGER",
     });
 
@@ -458,13 +435,10 @@ exports.createSurveyAsManager = async (req, res) => {
 
 exports.getManagerSurveys = async (req, res) => {
   try {
-    const userId = uid(req);
-    const tk     = token(req);
-
-    const manager = await userSvc.getUserSnapshot(userId, tk);
+    const { user: manager, tk } = await resolveCurrentUser(req);
     if (!manager) return res.status(404).json({ message: "Manager introuvable" });
 
-    const surveys = await Survey.find({ createdBy: userId, createdByRole: "MANAGER" })
+    const surveys = await Survey.find({ createdBy: manager._id, createdByRole: "MANAGER" })
       .sort({ createdAt: -1 });
 
     const populated = await resolveSurveyRefsMany(surveys, tk);
@@ -477,17 +451,13 @@ exports.getManagerSurveys = async (req, res) => {
 
 exports.updateSurveyAsManager = async (req, res) => {
   try {
-    const userId   = uid(req);
-    const tk       = token(req);
-    const surveyId = req.params.id;
-
-    const manager = await userSvc.getUserSnapshot(userId, tk);
+    const { user: manager, tk } = await resolveCurrentUser(req);
     if (!manager) return res.status(404).json({ message: "Manager introuvable" });
 
-    const survey = await Survey.findById(surveyId);
+    const survey = await Survey.findById(req.params.id);
     if (!survey) return res.status(404).json({ message: "Survey not found" });
 
-    if (survey.createdBy?.toString() !== userId.toString()) {
+    if (survey.createdBy !== manager._id) {
       return res.status(403).json({ message: "Vous n'avez pas accès à ce sondage" });
     }
 
@@ -500,11 +470,11 @@ exports.updateSurveyAsManager = async (req, res) => {
       if (!Array.isArray(req.body.specificUserIds) || req.body.specificUserIds.length === 0) {
         survey.specificUserIds = [];
       } else {
-        const existingSet = new Set(survey.specificUserIds.map((id) => id.toString()));
+        const existingSet = new Set(survey.specificUserIds);
         for (const rawId of req.body.specificUserIds) {
           const newId = rawId.toString();
           if (!existingSet.has(newId)) {
-            survey.specificUserIds.push(new mongoose.Types.ObjectId(rawId));
+            survey.specificUserIds.push(newId);
             existingSet.add(newId);
           }
         }
@@ -523,22 +493,18 @@ exports.updateSurveyAsManager = async (req, res) => {
 
 exports.deleteSurveyAsManager = async (req, res) => {
   try {
-    const userId   = uid(req);
-    const tk       = token(req);
-    const surveyId = req.params.id;
-
-    const manager = await userSvc.getUserSnapshot(userId, tk);
+    const { user: manager, tk } = await resolveCurrentUser(req);
     if (!manager) return res.status(404).json({ message: "Manager introuvable" });
 
-    const survey = await Survey.findById(surveyId);
+    const survey = await Survey.findById(req.params.id);
     if (!survey) return res.status(404).json({ message: "Survey not found" });
 
-    if (survey.createdBy?.toString() !== userId.toString()) {
+    if (survey.createdBy !== manager._id) {
       return res.status(403).json({ message: "Vous n'avez pas accès à ce sondage" });
     }
 
-    await Survey.findByIdAndDelete(surveyId);
-    await SurveyResponse.deleteMany({ survey: surveyId });
+    await Survey.findByIdAndDelete(req.params.id);
+    await SurveyResponse.deleteMany({ survey: req.params.id });
 
     res.json({ message: "Survey deleted" });
   } catch (error) {
@@ -549,26 +515,22 @@ exports.deleteSurveyAsManager = async (req, res) => {
 
 exports.getManagerSurveyStats = async (req, res) => {
   try {
-    const userId   = uid(req);
-    const tk       = token(req);
-    const surveyId = req.params.id;
-
-    const manager = await userSvc.getUserSnapshot(userId, tk);
+    const { user: manager, tk } = await resolveCurrentUser(req);
     if (!manager) return res.status(404).json({ message: "Manager introuvable" });
 
-    const survey = await Survey.findById(surveyId);
+    const survey = await Survey.findById(req.params.id);
     if (!survey) return res.status(404).json({ message: "Survey not found" });
 
-    if (survey.createdBy?.toString() !== userId.toString()) {
+    if (survey.createdBy !== manager._id) {
       return res.status(403).json({ message: "Vous n'avez pas accès à ce sondage" });
     }
 
-    const responses = await SurveyResponse.find({ survey: surveyId }).sort({ createdAt: -1 });
+    const responses = await SurveyResponse.find({ survey: req.params.id }).sort({ createdAt: -1 });
 
     const populated = await Promise.all(
       responses.map(async (r) => {
         let obj = r.toObject();
-        obj.user = isValidId(r.user) ? await userSvc.getUserSnapshot(r.user.toString(), tk) : null;
+        obj.user = r.user ? await userSvc.getUserSnapshot(r.user, tk) : null;
         obj = await resolvePracticeAtAnswer(obj, tk);
         return obj;
       })

@@ -6,7 +6,6 @@ const surveySchema = new mongoose.Schema(
 
     googleFormUrl: { type: String, default: null },
 
-    // Toujours COLLABORATOR
     target: {
       type: String,
       enum: ["COLLABORATOR", "MANAGER", "ALL"],
@@ -14,15 +13,15 @@ const surveySchema = new mongoose.Schema(
       required: true,
     },
 
-    // Historique cumulatif de toutes les practices ciblées (jamais écrasé)
+    // IDs practice-service (UUID string) — plus des ObjectId Mongo
     practices: {
-      type: [{ type: mongoose.Schema.Types.ObjectId, ref: "Practice" }],
+      type: [String],
       default: [],
     },
 
-    // Historique cumulatif de tous les utilisateurs spécifiquement ciblés (jamais écrasé)
+    // IDs user-service (UUID string) — plus des ObjectId Mongo
     specificUserIds: {
-      type: [{ type: mongoose.Schema.Types.ObjectId, ref: "User" }],
+      type: [String],
       default: [],
     },
 
@@ -35,18 +34,16 @@ const surveySchema = new mongoose.Schema(
     status:       { type: String, enum: ["ACTIVE", "INACTIVE"], default: "INACTIVE" },
     pointsReward: { type: Number, required: true, min: 0, default: 10 },
 
-    // ⚠️ Ajoutés : le controller les lit/écrit (updateSurvey, updateSurveyAsManager)
-    // mais ils étaient absents du schéma → écriture silencieusement ignorée en mode strict.
     startDate: { type: Date, default: null },
     endDate:   { type: Date, default: null },
 
-    createdBy:     { type: mongoose.Schema.Types.ObjectId, ref: "User", default: null },
+    // ID user-service (UUID string)
+    createdBy:     { type: String, default: null },
     createdByRole: { type: String, enum: ["ADMIN_RH", "MANAGER", "HRBP"], default: null },
   },
   { timestamps: true }
 );
 
-// Index utile pour buildUserFilter (status + target sont filtrés à chaque getSurveysForUser)
 surveySchema.index({ status: 1, target: 1 });
 
 module.exports = mongoose.models.Survey || mongoose.model("Survey", surveySchema);

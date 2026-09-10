@@ -1,6 +1,11 @@
 const mongoose = require("mongoose");
+const crypto = require("crypto");
 
 const practiceSchema = new mongoose.Schema({
+  _id: {
+    type: String,
+    default: () => crypto.randomUUID(),
+  },
   name: {
     type: String,
     required: true,
@@ -20,17 +25,14 @@ const practiceSchema = new mongoose.Schema({
     type: Date,
     default: Date.now,
   },
-  hrbp: [
-    {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: "User",
-    },
-  ],
+  hrbp: {
+    type: [String],
+    default: [],
+  },
   manager: {
-    type: mongoose.Schema.Types.ObjectId,
-    ref: "User",
+    type: String,
     default: null,
   },
 });
 
-module.exports = mongoose.model("Practice", practiceSchema);
+module.exports = mongoose.models.Practice || mongoose.model("Practice", practiceSchema);

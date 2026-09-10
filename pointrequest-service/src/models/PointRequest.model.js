@@ -2,9 +2,9 @@ const mongoose = require("mongoose");
 
 const pointRequestSchema = new mongoose.Schema(
   {
+    // ID user-service (UUID string) — pas un ObjectId Mongo
     requester: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: "User",
+      type: String,
       required: true,
       index: true,
     },
@@ -13,9 +13,9 @@ const pointRequestSchema = new mongoose.Schema(
       enum: ["COLLABORATEUR", "MANAGER"],
       default: "COLLABORATEUR",
     },
+    // ID practice-service (UUID string) — idem
     practice_id: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: "Practice",
+      type: String,
       default: null,
     },
     titre:          { type: String, required: true, trim: true },

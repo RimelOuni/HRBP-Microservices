@@ -4,45 +4,40 @@ const Point = require("../models/Point.model");
 const userSvc = require("../services/user.service");
 const practiceSvc = require("../services/practice.service");
 
-// ─── Helpers ──────────────────────────────────────────────────────────────
-
-function uid(req) {
-  return req.user?.userId || req.user?.id || req.user?._id;
-}
-
 function token(req) {
   return (req.headers.authorization || "").replace("Bearer ", "");
 }
 
-function isValidId(id) {
+function isValidObjectId(id) {
   return !!id && mongoose.Types.ObjectId.isValid(id.toString());
 }
 
 const resolveInvites = async (point, tk) => {
   const obj = typeof point.toObject === "function" ? point.toObject() : { ...point };
   const inviteArr = Array.isArray(obj.invite) ? obj.invite : (obj.invite ? [obj.invite] : []);
-  const validIds = inviteArr.filter(isValidId).map((id) => id.toString());
-  obj.invite = validIds.length > 0 ? await userSvc.getUsersByIds(validIds, tk) : [];
+  obj.invite = inviteArr.length > 0 ? await userSvc.getUsersByIds(inviteArr, tk) : [];
   return obj;
 };
 
 const resolveCreatedBy = async (obj, tk) => {
-  if (obj.created_by && isValidId(obj.created_by)) {
-    obj.created_by = await userSvc.getUserSnapshot(obj.created_by.toString(), tk);
+  if (obj.created_by) {
+    const snap = await userSvc.getUserSnapshot(obj.created_by, tk);
+    if (snap) obj.created_by = snap;
   }
   return obj;
 };
 
 const resolveCollaborateur = async (obj, tk) => {
-  if (obj.collaborateur && isValidId(obj.collaborateur)) {
-    obj.collaborateur = await userSvc.getUserSnapshot(obj.collaborateur.toString(), tk);
+  if (obj.collaborateur) {
+    const snap = await userSvc.getUserSnapshot(obj.collaborateur, tk);
+    if (snap) obj.collaborateur = snap;
   }
   return obj;
 };
 
 const resolvePracticeLight = async (obj, tk) => {
-  if (obj.practice_id && isValidId(obj.practice_id)) {
-    const pr = await practiceSvc.getPracticeById(obj.practice_id.toString(), tk);
+  if (obj.practice_id) {
+    const pr = await practiceSvc.getPracticeById(obj.practice_id, tk);
     obj.practice_id = pr ? { _id: pr._id, name: pr.name } : obj.practice_id;
   }
   return obj;
@@ -63,19 +58,12 @@ const fullyResolvePoint = async (point, tk) => {
 const getAllPractices = async (req, res) => {
   try {
     const practices = await practiceSvc.getActivePractices(token(req));
-
     const practicesWithCount = await Promise.all(
       practices.map(async (practice) => {
         const pointsCount = await Point.countDocuments({ practice_id: practice._id });
-        return {
-          _id: practice._id,
-          name: practice.name,
-          description: practice.description,
-          pointsCount,
-        };
+        return { _id: practice._id, name: practice.name, description: practice.description, pointsCount };
       })
     );
-
     return res.status(200).json({ success: true, data: practicesWithCount });
   } catch (error) {
     console.error("[point-service] getAllPractices error:", error.message);
@@ -87,10 +75,8 @@ const getPointsByPractice = async (req, res) => {
   try {
     const { practiceId } = req.params;
     const tk = token(req);
-
     const points = await Point.find({ practice_id: practiceId }).sort({ date: -1 });
     const populated = await Promise.all(points.map((p) => fullyResolvePoint(p, tk)));
-
     return res.status(200).json({ success: true, data: populated });
   } catch (error) {
     console.error("[point-service] getPointsByPractice error:", error.message);
@@ -102,16 +88,11 @@ const getPointById = async (req, res) => {
   try {
     const { pointId } = req.params;
     const tk = token(req);
-
-    if (!isValidId(pointId)) {
+    if (!isValidObjectId(pointId)) {
       return res.status(400).json({ success: false, message: "Invalid point ID" });
     }
-
     const point = await Point.findById(pointId);
-    if (!point) {
-      return res.status(404).json({ success: false, message: "Point not found" });
-    }
-
+    if (!point) return res.status(404).json({ success: false, message: "Point not found" });
     const obj = await fullyResolvePoint(point, tk);
     return res.status(200).json({ success: true, data: obj });
   } catch (error) {
@@ -131,7 +112,6 @@ const getAllPoints = async (req, res) => {
 
     const points = await Point.find(filter).sort({ date: -1 });
     const populated = await Promise.all(points.map((p) => fullyResolvePoint(p, tk)));
-
     return res.status(200).json({ success: true, data: populated });
   } catch (error) {
     console.error("[point-service] getAllPoints error:", error.message);
@@ -147,22 +127,20 @@ const createPoint = async (req, res) => {
     } = req.body;
 
     if (!titre || !date) {
-      return res.status(400).json({
-        success: false,
-        message: "Le titre et la date sont obligatoires.",
-      });
+      return res.status(400).json({ success: false, message: "Le titre et la date sont obligatoires." });
     }
 
-    const userId = uid(req);
-    if (!userId) {
-      return res.status(401).json({ success: false, message: "Unauthorized: user not found in token" });
+    const tk = token(req);
+    const profile = await userSvc.getCurrentUserProfile(tk);
+    if (!profile) {
+      return res.status(401).json({ success: false, message: "Unauthorized: unable to resolve user profile" });
     }
 
     const pointData = {
       titre, date, description, criticite, duree_estimee, frequence,
       is_recurring: is_recurring || false,
       status: status || "En attente",
-      created_by: userId,
+      created_by: profile._id,
     };
 
     if (collaborateur) pointData.collaborateur = collaborateur;
@@ -170,7 +148,7 @@ const createPoint = async (req, res) => {
     if (practice_id) pointData.practice_id = practice_id;
 
     const point = await new Point(pointData).save();
-    const obj = await fullyResolvePoint(point, token(req));
+    const obj = await fullyResolvePoint(point, tk);
 
     return res.status(201).json({ success: true, data: obj });
   } catch (error) {
@@ -183,22 +161,13 @@ const updatePoint = async (req, res) => {
   try {
     const { pointId } = req.params;
     const tk = token(req);
-
-    if (!isValidId(pointId)) {
+    if (!isValidObjectId(pointId)) {
       return res.status(400).json({ success: false, message: "Invalid point ID" });
     }
-
     const exists = await Point.findById(pointId);
-    if (!exists) {
-      return res.status(404).json({ success: false, message: "Point not found" });
-    }
+    if (!exists) return res.status(404).json({ success: false, message: "Point not found" });
 
-    const updated = await Point.findByIdAndUpdate(
-      pointId,
-      { $set: req.body },
-      { new: true, runValidators: false }
-    );
-
+    const updated = await Point.findByIdAndUpdate(pointId, { $set: req.body }, { new: true, runValidators: false });
     const obj = await fullyResolvePoint(updated, tk);
     return res.status(200).json({ success: true, data: obj });
   } catch (error) {
@@ -208,21 +177,20 @@ const updatePoint = async (req, res) => {
 };
 
 // ═══════════════════════════════════════════════════════════
-// COLLABORATEUR
+// COLLABORATEUR / MANAGER
 // ═══════════════════════════════════════════════════════════
 
 const getMyPoints = async (req, res) => {
   try {
-    const userId = uid(req);
-    if (!userId) return res.status(401).json({ success: false, message: "Unauthorized" });
-
     const tk = token(req);
-    const filter = { invite: { $in: [new mongoose.Types.ObjectId(userId)] } };
+    const profile = await userSvc.getCurrentUserProfile(tk);
+    if (!profile) return res.status(401).json({ success: false, message: "Unauthorized" });
+
+    const filter = { invite: profile._id }; // Mongo vérifie l'appartenance dans le tableau
     if (req.query.status) filter.status = req.query.status;
 
     const points = await Point.find(filter).sort({ date: -1 });
     const populated = await Promise.all(points.map((p) => fullyResolvePoint(p, tk)));
-
     return res.status(200).json({ success: true, data: populated });
   } catch (e) {
     console.error("[point-service] getMyPoints error:", e.message);
@@ -230,27 +198,17 @@ const getMyPoints = async (req, res) => {
   }
 };
 
-// ═══════════════════════════════════════════════════════════
-// MANAGER
-// ═══════════════════════════════════════════════════════════
-
 const getManagerPoints = async (req, res) => {
   try {
-    const userId = uid(req);
-    if (!userId) return res.status(401).json({ success: false, message: "Unauthorized" });
-
     const tk = token(req);
-    const filter = {
-      $or: [
-        { invite: { $in: [new mongoose.Types.ObjectId(userId)] } },
-        { created_by: new mongoose.Types.ObjectId(userId) },
-      ],
-    };
+    const profile = await userSvc.getCurrentUserProfile(tk);
+    if (!profile) return res.status(401).json({ success: false, message: "Unauthorized" });
+
+    const filter = { $or: [{ invite: profile._id }, { created_by: profile._id }] };
     if (req.query.status) filter.$and = [{ status: req.query.status }];
 
     const points = await Point.find(filter).sort({ date: -1 });
     const populated = await Promise.all(points.map((p) => fullyResolvePoint(p, tk)));
-
     return res.status(200).json({ success: true, data: populated });
   } catch (e) {
     console.error("[point-service] getManagerPoints error:", e.message);
@@ -258,31 +216,18 @@ const getManagerPoints = async (req, res) => {
   }
 };
 
-// ═══════════════════════════════════════════════════════════
-// HRBP par ID
-// ═══════════════════════════════════════════════════════════
-
 const getPointsByHrbp = async (req, res) => {
   try {
     const { hrbpId } = req.params;
-    if (!isValidId(hrbpId)) {
-      return res.status(400).json({ success: false, message: "Invalid HRBP ID" });
-    }
-
     const tk = token(req);
     const points = await Point.find({ created_by: hrbpId }).sort({ date: -1 });
     const populated = await Promise.all(points.map((p) => fullyResolvePoint(p, tk)));
-
     return res.status(200).json({ success: true, data: populated });
   } catch (error) {
     console.error("[point-service] getPointsByHrbp error:", error.message);
     return res.status(500).json({ success: false, message: "Error fetching points" });
   }
 };
-
-// ═══════════════════════════════════════════════════════════
-// STATS — criticité (reste ici, purement basé sur Point)
-// ═══════════════════════════════════════════════════════════
 
 const getCriticiteForMany = async (req, res) => {
   try {
@@ -293,16 +238,12 @@ const getCriticiteForMany = async (req, res) => {
 
     const result = {};
     for (const id of ids) {
-      if (!isValidId(id)) { result[id] = { Haute: 0, Moyenne: 0, Basse: 0 }; continue; }
-
       const counts = await Point.aggregate([
-        { $match: { collaborateur: new mongoose.Types.ObjectId(id) } },
+        { $match: { collaborateur: id } },
         { $group: { _id: "$criticite", count: { $sum: 1 } } },
       ]);
       result[id] = { Haute: 0, Moyenne: 0, Basse: 0 };
-      counts.forEach((c) => {
-        if (c._id in result[id]) result[id][c._id] = c.count;
-      });
+      counts.forEach((c) => { if (c._id in result[id]) result[id][c._id] = c.count; });
     }
 
     return res.json(result);
@@ -313,14 +254,7 @@ const getCriticiteForMany = async (req, res) => {
 };
 
 module.exports = {
-  getAllPractices,
-  getPointsByPractice,
-  getPointById,
-  getAllPoints,
-  createPoint,
-  updatePoint,
-  getMyPoints,
-  getManagerPoints,
-  getPointsByHrbp,
-  getCriticiteForMany,
+  getAllPractices, getPointsByPractice, getPointById, getAllPoints,
+  createPoint, updatePoint, getMyPoints, getManagerPoints,
+  getPointsByHrbp, getCriticiteForMany,
 };

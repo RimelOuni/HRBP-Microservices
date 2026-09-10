@@ -22,12 +22,4 @@ router.get("/:id/managers",      auth, ADMIN, ctrl.getManagersByPractice);
 // Par practice ET HRBP
 router.get("/:practiceId/hrbp/:hrbpId", auth, ADMIN, ctrl.getCollaboratorsByPracticeAndHrbp);
 
-// Assign / Remove collaborateurs
-router.post("/:practiceId/hrbp/:hrbpId/collaborators",   auth, ADMIN, ctrl.addCollaboratorsToHrbp);
-router.delete("/:practiceId/hrbp/:hrbpId/collaborators", auth, ADMIN, ctrl.removeCollaboratorsFromHrbp);
-
-// Assign / Remove managers
-router.post("/:practiceId/hrbp/:hrbpId/managers",   auth, ADMIN, ctrl.addManagersToHrbp);
-router.delete("/:practiceId/hrbp/:hrbpId/managers", auth, ADMIN, ctrl.removeManagersFromHrbp);
-
 module.exports = router;

@@ -2,15 +2,15 @@ const mongoose = require("mongoose");
 
 const badgeSchema = new mongoose.Schema(
   {
+    // ID user-service (UUID string) — pas un ObjectId Mongo
     userId: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: "User",
+      type: String,
       required: true,
       index: true,
     },
+    // ID practice-service (UUID string) — idem
     practiceId: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: "Practice",
+      type: String,
       default: null,
     },
     badgeId:               { type: String,   required: true },
@@ -27,7 +27,6 @@ const badgeSchema = new mongoose.Schema(
   { timestamps: true }
 );
 
-// Prevent same user earning same badge twice
 badgeSchema.index({ userId: 1, badgeId: 1 }, { unique: true });
 
 module.exports = mongoose.models.Badge || mongoose.model("Badge", badgeSchema);

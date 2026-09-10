@@ -1,29 +1,25 @@
+const mongoose = require("mongoose");
 const PointRequest = require("../models/PointRequest.model");
 const userSvc = require("../services/user.service");
 const practiceSvc = require("../services/practice.service");
-
-function uid(req) {
-  return req.user?.userId || req.user?.id || req.user?._id;
-}
 
 function token(req) {
   return (req.headers.authorization || "").replace("Bearer ", "");
 }
 
-function isValidId(id) {
-  return !!id && id.toString().match(/^[a-f\d]{24}$/i);
+// Valide uniquement l'_id Mongo de la PointRequest elle-même
+function isValidObjectId(id) {
+  return !!id && mongoose.Types.ObjectId.isValid(id.toString());
 }
 
 /** Résout requester + practice_id sur un document PointRequest */
 const resolveRequest = async (request, tk) => {
   const obj = request.toObject ? request.toObject() : { ...request };
 
-  obj.requester = isValidId(obj.requester)
-    ? await userSvc.getUserSnapshot(obj.requester.toString(), tk)
-    : null;
+  obj.requester = obj.requester ? await userSvc.getUserSnapshot(obj.requester, tk) : null;
 
-  if (isValidId(obj.practice_id)) {
-    const pr = await practiceSvc.getPracticeById(obj.practice_id.toString(), tk);
+  if (obj.practice_id) {
+    const pr = await practiceSvc.getPracticeById(obj.practice_id, tk);
     obj.practice_id = pr ? { _id: pr._id, name: pr.name } : obj.practice_id;
   }
 
@@ -37,11 +33,8 @@ const resolveRequest = async (request, tk) => {
 const getPracticeRequests = async (req, res) => {
   try {
     const tk = token(req);
-    const userId = uid(req);
-    if (!userId) return res.status(401).json({ success: false, message: "Unauthorized" });
-
-    const hrbp = await userSvc.getUserSnapshot(userId, tk);
-    if (!hrbp) return res.status(404).json({ success: false, message: "HRBP introuvable" });
+    const hrbp = await userSvc.getCurrentUserProfile(tk);
+    if (!hrbp) return res.status(401).json({ success: false, message: "Unauthorized: unable to resolve user profile" });
 
     const practiceIds = hrbp.practice_id || [];
 
@@ -61,7 +54,7 @@ const getPracticeRequests = async (req, res) => {
 const getRequestById = async (req, res) => {
   try {
     const tk = token(req);
-    if (!isValidId(req.params.id)) {
+    if (!isValidObjectId(req.params.id)) {
       return res.status(400).json({ success: false, message: "Invalid request ID" });
     }
 
@@ -82,7 +75,7 @@ const updateRequest = async (req, res) => {
     if (!["PENDING", "PROCESSED", "REJECTED"].includes(status))
       return res.status(400).json({ success: false, message: "Statut invalide" });
 
-    if (!isValidId(req.params.id)) {
+    if (!isValidObjectId(req.params.id)) {
       return res.status(400).json({ success: false, message: "Invalid request ID" });
     }
 
@@ -108,20 +101,20 @@ const updateRequest = async (req, res) => {
 
 const getMyRequests = async (req, res) => {
   try {
-    const userId = uid(req);
-    if (!userId) return res.status(401).json({ success: false, message: "Unauthorized" });
-
     const tk = token(req);
+    const profile = await userSvc.getCurrentUserProfile(tk);
+    if (!profile) return res.status(401).json({ success: false, message: "Unauthorized" });
+
     const requests = await PointRequest.find({
-      requester: userId,
+      requester: profile._id,
       requester_type: "COLLABORATEUR",
     }).sort({ createdAt: -1 });
 
     const populated = await Promise.all(
       requests.map(async (r) => {
         const obj = r.toObject();
-        if (isValidId(r.practice_id)) {
-          const pr = await practiceSvc.getPracticeById(r.practice_id.toString(), tk);
+        if (obj.practice_id) {
+          const pr = await practiceSvc.getPracticeById(obj.practice_id, tk);
           obj.practice_id = pr ? { _id: pr._id, name: pr.name } : obj.practice_id;
         }
         return obj;
@@ -137,8 +130,9 @@ const getMyRequests = async (req, res) => {
 
 const createPointRequest = async (req, res) => {
   try {
-    const userId = uid(req);
-    if (!userId) return res.status(401).json({ success: false, message: "Unauthorized" });
+    const tk = token(req);
+    const user = await userSvc.getCurrentUserProfile(tk);
+    if (!user) return res.status(401).json({ success: false, message: "Unauthorized" });
 
     const { titre, commentaire, date_souhaitee } = req.body;
     if (!titre?.trim())
@@ -146,12 +140,10 @@ const createPointRequest = async (req, res) => {
     if (!date_souhaitee)
       return res.status(400).json({ success: false, message: "La date souhaitée est obligatoire." });
 
-    const tk = token(req);
-    const user = await userSvc.getUserSnapshot(userId, tk);
-    const practiceId = user?.practice_id?.length ? user.practice_id[0] : null;
+    const practiceId = user.practice_id?.length ? user.practice_id[0] : null;
 
     const request = await new PointRequest({
-      requester: userId,
+      requester: user._id,
       requester_type: "COLLABORATEUR",
       practice_id: practiceId,
       titre: titre.trim(),
@@ -177,20 +169,20 @@ const createPointRequest = async (req, res) => {
 
 const getManagerRequests = async (req, res) => {
   try {
-    const userId = uid(req);
-    if (!userId) return res.status(401).json({ success: false, message: "Unauthorized" });
-
     const tk = token(req);
+    const profile = await userSvc.getCurrentUserProfile(tk);
+    if (!profile) return res.status(401).json({ success: false, message: "Unauthorized" });
+
     const requests = await PointRequest.find({
-      requester: userId,
+      requester: profile._id,
       requester_type: "MANAGER",
     }).sort({ createdAt: -1 });
 
     const populated = await Promise.all(
       requests.map(async (r) => {
         const obj = r.toObject();
-        if (isValidId(r.practice_id)) {
-          const pr = await practiceSvc.getPracticeById(r.practice_id.toString(), tk);
+        if (obj.practice_id) {
+          const pr = await practiceSvc.getPracticeById(obj.practice_id, tk);
           obj.practice_id = pr ? { _id: pr._id, name: pr.name } : obj.practice_id;
         }
         return obj;
@@ -206,8 +198,9 @@ const getManagerRequests = async (req, res) => {
 
 const createManagerPointRequest = async (req, res) => {
   try {
-    const userId = uid(req);
-    if (!userId) return res.status(401).json({ success: false, message: "Unauthorized" });
+    const tk = token(req);
+    const user = await userSvc.getCurrentUserProfile(tk);
+    if (!user) return res.status(401).json({ success: false, message: "Unauthorized" });
 
     const { titre, commentaire, date_souhaitee } = req.body;
     if (!titre?.trim())
@@ -215,12 +208,10 @@ const createManagerPointRequest = async (req, res) => {
     if (!date_souhaitee)
       return res.status(400).json({ success: false, message: "La date souhaitée est obligatoire." });
 
-    const tk = token(req);
-    const user = await userSvc.getUserSnapshot(userId, tk);
-    const practiceId = user?.practice_id?.length ? user.practice_id[0] : null;
+    const practiceId = user.practice_id?.length ? user.practice_id[0] : null;
 
     const request = await new PointRequest({
-      requester: userId,
+      requester: user._id,
       requester_type: "MANAGER",
       practice_id: practiceId,
       titre: titre.trim(),

@@ -1,65 +1,64 @@
 const axios = require("axios");
 
-const BASE    = () => process.env.USER_SERVICE_URL; // http://localhost:5000
+const BASE    = () => process.env.USER_SERVICE_URL;
 const headers = (token) => ({ Authorization: `Bearer ${token}` });
 const TIMEOUT = 8000;
 
-/**
- * Récupère un user complet par son ID depuis le monolithe.
- * Renvoie null si introuvable (jamais de throw).
- */
+function mapUser(u) {
+  if (!u) return null;
+  return {
+    _id:         u.id,
+    first_name:  u.prenom,
+    last_name:   u.nom,
+    email:       u.email,
+    role:        u.role || null,
+    practice_id: u.practiceId ? [String(u.practiceId)] : [],
+  };
+}
+
+
 const getUserById = async (userId, token) => {
   if (!userId) return null;
   try {
-    const { data } = await axios.get(`${BASE()}/api/user/${userId}`, {
+    const { data } = await axios.get(`${BASE()}/api/users/${userId}`, {
       headers: headers(token),
       timeout: TIMEOUT,
     });
-    return data?.data || data;
+    return data;
   } catch (err) {
     console.error(`[survey-service] user.service getUserById(${userId}) failed:`, err.message);
     return null;
   }
 };
 
-/**
- * Normalise practice_id en tableau de strings, quel que soit le format
- * renvoyé par le user-service.
- */
-function normalizePracticeIds(practice_id) {
-  if (!practice_id) return [];
-  const arr = Array.isArray(practice_id) ? practice_id : [practice_id];
-  return arr
-    .map((p) => (typeof p === "object" && p !== null ? p._id : p))
-    .filter(Boolean)
-    .map((p) => p.toString());
-}
 
-/**
- * Récupère un snapshot minimal d'un user (pour populate côté survey-service).
- */
 const getUserSnapshot = async (userId, token) => {
   const u = await getUserById(userId, token);
-  if (!u) return null;
-  return {
-    _id:         u._id,
-    firstName:   u.firstName  || u.first_name,
-    lastName:    u.lastName   || u.last_name,
-    email:       u.email,
-    practice_id: normalizePracticeIds(u.practice_id),
-    role:        u.role || null,
-  };
+  return mapUser(u);
 };
 
 /**
- * Incrémente les compteurs de gamification d'un user via une route
- * dédiée du user-service (PATCH /api/user/:id/gamification).
- * Renvoie { points, surveysAnswered } mis à jour, ou null en cas d'échec.
+ * Résout l'utilisateur courant via /api/users/me (keycloakId → id interne).
+ * Indispensable puisque le token Keycloak ne contient plus l'ID user-service.
  */
+const getCurrentUserProfile = async (token) => {
+  try {
+    const { data } = await axios.get(`${BASE()}/api/users/me`, {
+      headers: headers(token),
+      timeout: TIMEOUT,
+    });
+    return mapUser(data);
+  } catch (err) {
+    console.error("[survey-service] user.service getCurrentUserProfile failed:", err.message);
+    return null;
+  }
+};
+
+
 const incrementGamification = async (userId, { pointsDelta, surveysDelta }, token) => {
   try {
     const { data } = await axios.patch(
-      `${BASE()}/api/user/${userId}/gamification`,
+      `${BASE()}/api/users/${userId}/gamification`,
       { pointsDelta, surveysDelta },
       { headers: headers(token), timeout: TIMEOUT }
     );
@@ -73,6 +72,6 @@ const incrementGamification = async (userId, { pointsDelta, surveysDelta }, toke
 module.exports = {
   getUserById,
   getUserSnapshot,
+  getCurrentUserProfile,
   incrementGamification,
-  normalizePracticeIds,
 };
